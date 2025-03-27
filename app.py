@@ -1,83 +1,15 @@
 import io
+import torch
 import numpy as np
 import scipy.io.wavfile
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
+from transformers import AutoProcessor, MusicgenForConditionalGeneration
 
-class MusicGenerator(nn.Module):
-    def __init__(self, input_size=10, hidden_size=64, output_size=1):
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Linear(input_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size * 2),
-            nn.ReLU()
-        )
-        self.decoder = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, output_size)
-        )
-    
-    def forward(self, x):
-        encoded = self.encoder(x)
-        decoded = self.decoder(encoded)
-        return decoded
-
-def generate_harmonic_wave(frequency, duration, sample_rate=44100):
-    """Generate a harmonic wave with some musical characteristics."""
-    t = np.linspace(0, duration, int(sample_rate * duration), False)
-    
-    # Create a more musical waveform with multiple harmonics
-    wave = (
-        np.sin(2 * np.pi * frequency * t) +  # Fundamental frequency
-        0.5 * np.sin(2 * np.pi * (frequency * 2) * t) +  # Second harmonic
-        0.25 * np.sin(2 * np.pi * (frequency * 3) * t)  # Third harmonic
-    )
-    
-    # Apply envelope to reduce harshness
-    envelope = np.exp(-t * 5)
-    wave *= envelope
-    
-    return wave
-
-def generate_music(prompt="", duration=3, sample_rate=44100):
-    # Map prompt to musical characteristics
-    prompt_seed = hash(prompt) % 1000
-    np.random.seed(prompt_seed)
-    
-    # Select a base frequency based on prompt
-    base_frequencies = [
-        220,  # A3 - soft
-        261.63,  # C4 - neutral
-        329.63,  # E4 - bright
-        392,  # G4 - warm
-    ]
-    
-    # Choose frequency based on prompt length or content
-    frequency = base_frequencies[len(prompt) % len(base_frequencies)]
-    
-    # Generate musical wave
-    audio = generate_harmonic_wave(frequency, duration, sample_rate)
-    
-    # Add some gentle variation
-    variation = np.random.normal(0, 0.1, audio.shape)
-    audio += variation
-    
-    # Normalize
-    audio = audio / np.max(np.abs(audio))
-    audio = (audio * 32767).astype(np.int16)
-    
-    # Save to buffer
-    buffer = io.BytesIO()
-    scipy.io.wavfile.write(buffer, sample_rate, audio)
-    buffer.seek(0)
-    
-    return buffer
+# Load model (only once when the server starts)
+model = MusicgenForConditionalGeneration.from_pretrained("facebook/musicgen-small")
+processor = AutoProcessor.from_pretrained("facebook/musicgen-small")
 
 # Create FastAPI app
 app = FastAPI()
@@ -91,10 +23,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+def generate_music(prompt: str = "calm piano melody", duration: int = 4):
+    try:
+        # Prepare inputs
+        inputs = processor(
+            text=[prompt],
+            padding=True,
+            return_tensors="pt"
+        )
+        
+        # Generate audio
+        with torch.no_grad():
+            audio_values = model.generate(**inputs, max_new_tokens=duration * 50)
+        
+        # Convert to numpy and prepare for wav
+        audio_numpy = audio_values[0].cpu().numpy()
+        
+        # Normalize
+        audio_numpy = audio_numpy / np.max(np.abs(audio_numpy))
+        audio_numpy = (audio_numpy * 32767).astype(np.int16)
+        
+        # Save to buffer
+        buffer = io.BytesIO()
+        scipy.io.wavfile.write(buffer, 32000, audio_numpy)
+        buffer.seek(0)
+        
+        return buffer
+    
+    except Exception as e:
+        print(f"Error generating music: {e}")
+        return None
+
 @app.post("/generate")
-async def generate_music_endpoint(prompt: str = "calm melody", duration: int = 3):
+async def generate_music_endpoint(prompt: str = "calm piano", duration: int = 4):
     buffer = generate_music(prompt, duration)
-    return StreamingResponse(buffer, media_type="audio/wav")
+    if buffer:
+        return StreamingResponse(buffer, media_type="audio/wav")
+    else:
+        return {"error": "Could not generate music"}
 
 # For local running
 if __name__ == "__main__":

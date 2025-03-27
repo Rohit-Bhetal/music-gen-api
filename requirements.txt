@@ -1,6 +1,6 @@
 fastapi
 uvicorn
 torch
-numpy
+transformers
 scipy
-python-multipart
+numpy
