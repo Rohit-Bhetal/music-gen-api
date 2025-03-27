@@ -7,9 +7,20 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from transformers import AutoProcessor, MusicgenForConditionalGeneration
 
-# Load model (only once when the server starts)
-model = MusicgenForConditionalGeneration.from_pretrained("facebook/musicgen-small")
-processor = AutoProcessor.from_pretrained("facebook/musicgen-small")
+# Load model in a memory-efficient way
+model = None
+processor = None
+
+def load_model():
+    global model, processor
+    if model is None:
+        model = MusicgenForConditionalGeneration.from_pretrained(
+            "facebook/musicgen-small", 
+            torch_dtype=torch.float16  # Use half precision to reduce memory
+        )
+        processor = AutoProcessor.from_pretrained("facebook/musicgen-small")
+        # Move to CPU to reduce GPU memory usage
+        model = model.to("cpu")
 
 # Create FastAPI app
 app = FastAPI()
@@ -25,6 +36,9 @@ app.add_middleware(
 
 def generate_music(prompt: str = "calm piano melody", duration: int = 4):
     try:
+        # Lazy load model to reduce initial memory footprint
+        load_model()
+        
         # Prepare inputs
         inputs = processor(
             text=[prompt],
@@ -32,9 +46,14 @@ def generate_music(prompt: str = "calm piano melody", duration: int = 4):
             return_tensors="pt"
         )
         
-        # Generate audio
+        # Generate audio with memory efficiency
         with torch.no_grad():
-            audio_values = model.generate(**inputs, max_new_tokens=duration * 50)
+            audio_values = model.generate(
+                **inputs, 
+                max_new_tokens=duration * 50,
+                do_sample=True,  # Add some randomness
+                temperature=1.0  # Control creativity
+            )
         
         # Convert to numpy and prepare for wav
         audio_numpy = audio_values[0].cpu().numpy()
@@ -65,4 +84,4 @@ async def generate_music_endpoint(prompt: str = "calm piano", duration: int = 4)
 # For local running
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=7860)
+    uvicorn.run(app, host="0.0.0.0", port=5000)
