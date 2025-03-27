@@ -2,7 +2,7 @@ import io
 import torch
 import numpy as np
 import scipy.io.wavfile
-from fastapi import FastAPI
+from fastapi import FastAPI,Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from transformers import AutoProcessor, MusicgenForConditionalGeneration
