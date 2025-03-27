@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-transformers
-torch==2.0.1+cpu  # CPU-only to avoid GPU memory issues
-scipy
+torch
 numpy
+scipy
