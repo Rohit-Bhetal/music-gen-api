@@ -28,10 +28,11 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],  # Allows all origins
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # Allows all methods
+    allow_headers=["*"],  # Allows all headers
+    expose_headers=["*"] 
 )
 
 def generate_music(prompt: str = "calm piano melody", duration: int = 4):
@@ -72,24 +73,34 @@ def generate_music(prompt: str = "calm piano melody", duration: int = 4):
     except Exception as e:
         print(f"Error generating music: {e}")
         return None
-
 @app.post("/generate")
-async def generate_music_endpoint(prompt: str = "calm piano", duration: int = 4):
+async def generate_music_endpoint(request: Request, prompt: str = "calm piano", duration: int = 4):
+    # Debug: Print incoming headers
+    print("Incoming headers:", request.headers)
+    
     buffer = generate_music(prompt, duration)
     if buffer:
-        return StreamingResponse(
+        response = StreamingResponse(
             buffer,
             media_type="audio/wav",
             headers={
                 "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "POST",
-                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Expose-Headers": "*",
+                "Access-Control-Allow-Credentials": "true",
             }
         )
+        # Debug: Print response headers
+        print("Response headers:", response.headers)
+        return response
     else:
-        return {"error": "Could not generate music"}
+        return JSONResponse(
+            content={"error": "Could not generate music"},
+            headers={
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Credentials": "true",
+            }
+        )
 
-# For local running
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=5000)
