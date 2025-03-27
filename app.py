@@ -77,7 +77,15 @@ def generate_music(prompt: str = "calm piano melody", duration: int = 4):
 async def generate_music_endpoint(prompt: str = "calm piano", duration: int = 4):
     buffer = generate_music(prompt, duration)
     if buffer:
-        return StreamingResponse(buffer, media_type="audio/wav")
+        StreamingResponse(
+            buffer,
+            media_type="audio/wav",
+            headers={
+                "Access-Control-Allow-Origin": "*",  # Or specify your frontend origin, e.g., "http://localhost:3000"
+                "Access-Control-Allow-Methods": "POST",
+                "Access-Control-Allow-Headers": "*",
+            }
+        )
     else:
         return {"error": "Could not generate music"}
 
