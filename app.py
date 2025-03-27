@@ -8,39 +8,67 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-# Simple Neural Network for Music Generation
-class SimpleMusicGenerator(nn.Module):
-    def __init__(self, input_size=100, hidden_size=256, output_size=1):
+class MusicGenerator(nn.Module):
+    def __init__(self, input_size=10, hidden_size=64, output_size=1):
         super().__init__()
-        self.fc1 = nn.Linear(input_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, output_size)
+        self.encoder = nn.Sequential(
+            nn.Linear(input_size, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, hidden_size * 2),
+            nn.ReLU()
+        )
+        self.decoder = nn.Sequential(
+            nn.Linear(hidden_size * 2, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, output_size)
+        )
     
     def forward(self, x):
-        x = F.relu(self.fc1(x))
-        x = F.relu(self.fc2(x))
-        return self.fc3(x)
+        encoded = self.encoder(x)
+        decoded = self.decoder(encoded)
+        return decoded
 
-# Initialize the model and create a simple generation function
-model = SimpleMusicGenerator()
+def generate_harmonic_wave(frequency, duration, sample_rate=44100):
+    """Generate a harmonic wave with some musical characteristics."""
+    t = np.linspace(0, duration, int(sample_rate * duration), False)
+    
+    # Create a more musical waveform with multiple harmonics
+    wave = (
+        np.sin(2 * np.pi * frequency * t) +  # Fundamental frequency
+        0.5 * np.sin(2 * np.pi * (frequency * 2) * t) +  # Second harmonic
+        0.25 * np.sin(2 * np.pi * (frequency * 3) * t)  # Third harmonic
+    )
+    
+    # Apply envelope to reduce harshness
+    envelope = np.exp(-t * 5)
+    wave *= envelope
+    
+    return wave
 
 def generate_music(prompt="", duration=3, sample_rate=44100):
-    # Generate a random seed based on input
-    seed = hash(prompt) % 1000
-    torch.manual_seed(seed)
+    # Map prompt to musical characteristics
+    prompt_seed = hash(prompt) % 1000
+    np.random.seed(prompt_seed)
     
-    # Generate random input
-    input_tensor = torch.randn(1, 100)
+    # Select a base frequency based on prompt
+    base_frequencies = [
+        220,  # A3 - soft
+        261.63,  # C4 - neutral
+        329.63,  # E4 - bright
+        392,  # G4 - warm
+    ]
     
-    # Generate audio-like output
-    with torch.no_grad():
-        output = model(input_tensor)
+    # Choose frequency based on prompt length or content
+    frequency = base_frequencies[len(prompt) % len(base_frequencies)]
     
-    # Create a simple waveform
-    audio = np.sin(np.linspace(0, duration * 2 * np.pi * 440, int(duration * sample_rate)))
-    audio += output.numpy().flatten()[:len(audio)]
+    # Generate musical wave
+    audio = generate_harmonic_wave(frequency, duration, sample_rate)
     
-    # Normalize audio
+    # Add some gentle variation
+    variation = np.random.normal(0, 0.1, audio.shape)
+    audio += variation
+    
+    # Normalize
     audio = audio / np.max(np.abs(audio))
     audio = (audio * 32767).astype(np.int16)
     
@@ -57,10 +85,10 @@ app = FastAPI()
 # Add CORS middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=["*"],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 @app.post("/generate")
@@ -72,11 +100,3 @@ async def generate_music_endpoint(prompt: str = "calm melody", duration: int = 3
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=7860)
-
-# Update requirements.txt:
-# fastapi
-# uvicorn
-# torch
-# numpy
-# scipy
-# python-multipart
