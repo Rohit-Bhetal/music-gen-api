@@ -1,0 +1,170 @@
+I'll rewrite the previous Flask-based API using FastAPI, which offers asynchronous capabilities, automatic OpenAPI documentation, and better performance for I/O-bound tasks like streaming. The functionality will remain the same: support for prompt, duration, and temperature parameters, with options for streaming or downloading the generated audio using MusicGen Small.
+
+### Updated Code with FastAPI
+
+```python
+# app.py
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import StreamingResponse, FileResponse
+from pydantic import BaseModel
+import torch
+from audiocraft.models import MusicGen
+import io
+import scipy.io.wavfile
+import numpy as np
+
+app = FastAPI(title="MusicGen API", description="Generate music with MusicGen Small")
+
+# Load the smallest MusicGen model (300M parameters)
+model = MusicGen.get_pretrained('facebook/musicgen-small')
+SAMPLE_RATE = model.sample_rate
+
+# Define request model
+class MusicRequest(BaseModel):
+    prompt: str = "A calm acoustic melody"
+    duration: float = 10.0
+    temperature: float = 1.0
+    stream: bool = False
+
+def generate_audio_chunks(prompt: str, duration: float, temperature: float):
+    """Generate audio and yield it in chunks for streaming."""
+    duration = min(max(float(duration), 5), 30)  # Clamp between 5 and 30 seconds
+    model.set_generation_params(duration=duration, temperature=temperature)
+
+    # Generate audio
+    wav = model.generate([prompt], progress=True)
+    audio = wav[0].cpu().numpy()
+
+    # Create in-memory buffer and write WAV data
+    buffer = io.BytesIO()
+    scipy.io.wavfile.write(buffer, rate=SAMPLE_RATE, data=audio)
+    buffer.seek(0)
+
+    # Yield audio in chunks (64KB)
+    chunk_size = 64 * 1024
+    while True:
+        chunk = buffer.read(chunk_size)
+        if not chunk:
+            break
+        yield chunk
+    buffer.close()
+
+@app.post("/generate")
+async def generate_music(request: MusicRequest):
+    """Generate music based on request parameters."""
+    # Validate temperature
+    temperature = min(max(request.temperature, 0.5), 2.0)  # Clamp between 0.5 and 2.0
+
+    try:
+        if request.stream:
+            # Stream the audio
+            return StreamingResponse(
+                generate_audio_chunks(request.prompt, request.duration, temperature),
+                media_type="audio/wav",
+                headers={"Content-Disposition": "inline; filename=generated_music.wav"}
+            )
+        else:
+            # Generate and return full file for download
+            duration = min(max(request.duration, 5), 30)
+            model.set_generation_params(duration=duration, temperature=temperature)
+            wav = model.generate([request.prompt], progress=True)
+            audio = wav[0].cpu().numpy()
+
+            buffer = io.BytesIO()
+            scipy.io.wavfile.write(buffer, rate=SAMPLE_RATE, data=audio)
+            buffer.seek(0)
+
+            return FileResponse(
+                buffer,
+                media_type="audio/wav",
+                filename="generated_music.wav",
+                headers={"Content-Disposition": "attachment; filename=generated_music.wav"}
+            )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=5000)
+```
+
+### Updated `requirements.txt`
+FastAPI requires `uvicorn` as the ASGI server, and we’ll add `pydantic` explicitly (though it’s a FastAPI dependency):
+
+```
+fastapi==0.103.2
+uvicorn==0.23.2
+pydantic==2.4.2
+torch==2.0.1
+audiocraft==1.3.0
+scipy==1.11.3
+```
+
+### Deployment Files
+- **Procfile** (for Render):
+  ```
+  web: uvicorn app:app --host 0.0.0.0 --port 5000
+  ```
+- **Git Setup**: Same as before—initialize a Git repo, add files, and push to GitHub.
+
+### Key Changes from Flask
+1. **FastAPI**: Uses async/await syntax and provides automatic OpenAPI docs at `/docs`.
+2. **Pydantic Model**: `MusicRequest` validates incoming JSON data with type hints and defaults.
+3. **Responses**:
+   - `StreamingResponse` for streaming audio chunks.
+   - `FileResponse` for downloading the full file.
+4. **Error Handling**: Uses `HTTPException` for cleaner error responses.
+
+### Deployment to Render
+1. **Prepare the Project**:
+   - Save `app.py` and `requirements.txt` in a directory.
+   - Create the `Procfile` as above.
+
+2. **Push to GitHub**:
+   ```bash
+   git init
+   git add app.py requirements.txt Procfile
+   git commit -m "FastAPI MusicGen API"
+   git remote add origin <your-github-repo-url>
+   git push -u origin main
+   ```
+
+3. **Deploy on Render**:
+   - Log in to [render.com](https://render.com), click **New > Web Service**.
+   - Connect your GitHub repo.
+   - Configure:
+     - **Runtime**: Python 3
+     - **Build Command**: `pip install -r requirements.txt`
+     - **Start Command**: `uvicorn app:app --host 0.0.0.0 --port 5000`
+     - **Instance Type**: Free tier
+   - Deploy!
+
+### Testing
+1. **API Documentation**: After deployment, visit `https://your-app-name.onrender.com/docs` for an interactive Swagger UI.
+2. **Streaming**:
+   - Use `curl`:
+     ```bash
+     curl -X POST -H "Content-Type: application/json" -d '{"prompt":"A jazzy piano tune","duration":15,"temperature":1.5,"stream":true}' https://your-app-name.onrender.com/generate | ffplay -i -
+     ```
+3. **Download**:
+   - Use `curl`:
+     ```bash
+     curl -X POST -H "Content-Type: application/json" -d '{"prompt":"Soft guitar melody","duration":10,"temperature":0.8}' https://your-app-name.onrender.com/generate --output music.wav
+     ```
+
+### Example Request
+```json
+{
+  "prompt": "Upbeat electronic beat",
+  "duration": 20,
+  "temperature": 1.2,
+  "stream": false
+}
+```
+
+### Notes
+- **Performance**: FastAPI’s async capabilities improve handling of concurrent requests, though MusicGen generation is CPU-bound and synchronous. The free tier’s 512 MB RAM still suffices for MusicGen Small with short durations.
+- **Streaming**: Chunks are 64KB, balancing memory use and responsiveness.
+- **Limits**: Duration is capped at 30 seconds to fit Render’s free tier constraints.
+
+This FastAPI version retains all requested features—prompt customization, streaming, and downloading—while leveraging FastAPI’s modern features. Let me know if you need further adjustments!
