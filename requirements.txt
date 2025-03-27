@@ -1,6 +1,6 @@
-torch==2.1.0
-audiocraft==1.3.0
 fastapi
 uvicorn
+transformers
+torch==2.0.1+cpu  # CPU-only to avoid GPU memory issues
 scipy
 numpy
