@@ -2,20 +2,21 @@ import io
 import torch
 import numpy as np
 import scipy.io.wavfile
-from fastapi import FastAPI,Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from transformers import AutoProcessor, MusicgenForConditionalGeneration
 
-# Load model in a memory-efficient way
+# Global model and processor variables
 model = None
 processor = None
 
 def load_model():
+    """Lazily load the Musicgen model"""
     global model, processor
     if model is None:
         model = MusicgenForConditionalGeneration.from_pretrained(
-            "facebook/musicgen-small", 
+            "facebook/musicgen-small",
             torch_dtype=torch.float16  # Use half precision to reduce memory
         )
         processor = AutoProcessor.from_pretrained("facebook/musicgen-small")
@@ -25,81 +26,72 @@ def load_model():
 # Create FastAPI app
 app = FastAPI()
 
-# Add CORS middleware
+# Configure CORS with more specific settings
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Allows all origins
+    allow_origins=[
+        "http://localhost:3000",  # React dev server
+        "https://capstone-project-ai-saas.vercel.app/",  # Replace with your frontend domain
+        # Add other allowed origins
+    ],
     allow_credentials=True,
-    allow_methods=["*"],  # Allows all methods
-    allow_headers=["*"],  # Allows all headers
-    expose_headers=["*"] 
+    allow_methods=["POST", "OPTIONS"],  # Specific methods
+    allow_headers=["*"]  # Or specify exact headers if needed
 )
 
 def generate_music(prompt: str = "calm piano melody", duration: int = 4):
+    """Generate music from a text prompt"""
     try:
-        # Lazy load model to reduce initial memory footprint
+        # Lazy load model
         load_model()
-        
+       
         # Prepare inputs
         inputs = processor(
             text=[prompt],
             padding=True,
             return_tensors="pt"
         )
-        
+       
         # Generate audio with memory efficiency
         with torch.no_grad():
             audio_values = model.generate(
-                **inputs, 
+                **inputs,
                 max_new_tokens=duration * 50,
-                do_sample=True,  # Add some randomness
-                temperature=1.0  # Control creativity
+                do_sample=True,
+                temperature=1.0
             )
-        
+       
         # Convert to numpy and prepare for wav
         audio_numpy = audio_values[0].cpu().numpy()
-        
+       
         # Normalize
         audio_numpy = audio_numpy / np.max(np.abs(audio_numpy))
         audio_numpy = (audio_numpy * 32767).astype(np.int16)
-        
+       
         # Save to buffer
         buffer = io.BytesIO()
         scipy.io.wavfile.write(buffer, 32000, audio_numpy)
         buffer.seek(0)
-        
+       
         return buffer
-    
+   
     except Exception as e:
         print(f"Error generating music: {e}")
-        return None
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.post("/generate")
 async def generate_music_endpoint(request: Request, prompt: str = "calm piano", duration: int = 4):
-    # Debug: Print incoming headers
-    print("Incoming headers:", request.headers)
-    
+    """Endpoint for music generation"""
     buffer = generate_music(prompt, duration)
-    if buffer:
-        response = StreamingResponse(
-            buffer,
-            media_type="audio/wav",
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Expose-Headers": "*",
-                "Access-Control-Allow-Credentials": "true",
-            }
-        )
-        # Debug: Print response headers
-        print("Response headers:", response.headers)
-        return response
-    else:
-        return JSONResponse(
-            content={"error": "Could not generate music"},
-            headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Credentials": "true",
-            }
-        )
+    return StreamingResponse(
+        buffer, 
+        media_type="audio/wav"
+    )
+
+@app.options("/generate")
+async def options_handler():
+    """Handle preflight CORS requests"""
+    return JSONResponse(status_code=200)
 
 if __name__ == "__main__":
     import uvicorn
